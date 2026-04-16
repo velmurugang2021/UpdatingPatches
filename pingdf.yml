@@ -1,0 +1,17 @@
+---
+- name: Check disk usage and connectivity
+  hosts: all
+  become: no
+  gather_facts: no
+
+  tasks:
+    - name: Test connectivity using Ansible ping
+      ping:
+
+    - name: Check disk usage (df -hT)
+      command: df -hT
+      register: disk_output
+
+    - name: Display disk usage
+      debug:
+        var: disk_output.stdout_lines
