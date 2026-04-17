@@ -1,6 +1,6 @@
 ---
 - name: Patch Ubuntu 22.04 Servers
-  hosts: all
+  hosts: ubuntu
   become: true
   tasks:
     - name: Update apt cache and upgrade all packages
