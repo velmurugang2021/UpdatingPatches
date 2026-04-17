@@ -4,6 +4,10 @@
   gather_facts: yes
 
   vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    ansible_port: 5985
     patch_reboot_required: true
     patch_security_only: false
 
@@ -12,7 +16,7 @@
     - name: Test WinRM connection
       win_ping:
 
-    - name: Check free disk space on C drive
+    - name: Check free disk space
       win_shell: |
         $disk = Get-PSDrive C
         [math]::Round($disk.Free / 1GB, 2)
@@ -22,22 +26,6 @@
     - name: Show disk space
       debug:
         msg: "{{ inventory_hostname }} - Free: {{ free_disk.stdout | trim }} GB"
-
-    - name: Fail if disk less than 2GB
-      fail:
-        msg: "Low disk space: {{ free_disk.stdout | trim }} GB on {{ inventory_hostname }}"
-      when: free_disk.stdout | trim | float < 2.0
-
-    - name: Install security updates only
-      win_updates:
-        category_names:
-          - SecurityUpdates
-          - CriticalUpdates
-        state: installed
-        reboot: false
-        log_path: C:\ansible_patch.log
-      register: patch_result
-      when: patch_security_only | bool
 
     - name: Install ALL updates
       win_updates:
@@ -50,7 +38,6 @@
         reboot: false
         log_path: C:\ansible_patch.log
       register: patch_result
-      when: not (patch_security_only | bool)
 
     - name: Show patch results
       debug:
@@ -77,10 +64,7 @@
         - patch_result.reboot_required | default(false)
         - patch_reboot_required | bool
 
-    - name: Verify WinRM still works after reboot
-      win_ping:
-
-    - name: Get last 5 installed hotfixes
+    - name: Get installed hotfixes
       win_shell: |
         Get-HotFix |
         Sort-Object InstalledOn -Descending |
@@ -90,7 +74,7 @@
       register: hotfix_list
       changed_when: false
 
-    - name: Show installed hotfixes
+    - name: Show hotfixes
       debug:
         msg: "{{ hotfix_list.stdout_lines }}"
 
