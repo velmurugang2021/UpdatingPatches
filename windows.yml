@@ -2,7 +2,7 @@
 # Tasks to patch a Windows Server
 
 - name: Windows update playbook
-  hosts: win22
+  hosts: windows_nodes
   gather_facts: false
   become: true
 
