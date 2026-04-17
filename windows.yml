@@ -1,56 +1,23 @@
 ---
 - name: Windows update playbook
-  hosts: windows_nodes
+  hosts: all
   gather_facts: yes
-
-  vars:
-    patch_reboot_required: true
-    patch_security_only: false
 
   tasks:
 
-    - name: Ping Windows hosts first
+    - name: Run only on Windows hosts
       win_ping:
+      when: ansible_os_family == "Windows"
 
-    - name: Check free disk space
-      win_shell: |
-        $disk = Get-PSDrive C
-        [math]::Round($disk.Free / 1GB, 2)
-      register: free_disk
-      changed_when: false
-
-    - name: Show disk space
-      debug:
-        msg: "{{ inventory_hostname }} — Free: {{ free_disk.stdout | trim }} GB"
-
-    - name: Fail if disk space less than 2GB
-      fail:
-        msg: "Not enough disk space: {{ free_disk.stdout | trim }} GB"
-      when: free_disk.stdout | trim | float < 2.0
-
-    - name: Install security updates only
+    - name: Install Windows updates
       win_updates:
         category_names:
           - SecurityUpdates
           - CriticalUpdates
         state: installed
         reboot: false
-        log_path: C:\ansible_patch.log
       register: patch_result
-      when: patch_security_only | bool
-
-    - name: Install ALL updates
-      win_updates:
-        category_names:
-          - SecurityUpdates
-          - CriticalUpdates
-          - UpdateRollups
-          - Updates
-        state: installed
-        reboot: false
-        log_path: C:\ansible_patch.log
-      register: patch_result
-      when: not (patch_security_only | bool)
+      when: ansible_os_family == "Windows"
 
     - name: Show patch results
       debug:
@@ -58,6 +25,7 @@
           Host: {{ inventory_hostname }}
           Updates installed: {{ patch_result.installed_update_count | default(0) }}
           Reboot required: {{ patch_result.reboot_required | default(false) }}
+      when: ansible_os_family == "Windows"
 
     - name: Reboot if required
       win_reboot:
@@ -66,41 +34,5 @@
         post_reboot_delay: 30
         reboot_timeout: 600
       when:
+        - ansible_os_family == "Windows"
         - patch_result.reboot_required | default(false)
-        - patch_reboot_required | bool
-
-    - name: Wait for host to come back
-      wait_for_connection:
-        delay: 30
-        timeout: 300
-      when:
-        - patch_result.reboot_required | default(false)
-        - patch_reboot_required | bool
-
-    - name: Verify services after reboot
-      win_service:
-        name: "{{ item }}"
-        state: started
-      loop:
-        - WinRM
-        - wuauserv
-        - EventLog
-      ignore_errors: yes
-
-    - name: Get last 5 installed hotfixes
-      win_shell: |
-        Get-HotFix |
-        Sort-Object InstalledOn -Descending |
-        Select-Object -First 5 |
-        Format-Table HotFixID, Description, InstalledOn -AutoSize |
-        Out-String
-      register: hotfix_list
-      changed_when: false
-
-    - name: Show installed hotfixes
-      debug:
-        msg: "{{ hotfix_list.stdout_lines }}"
-
-    - name: Patching complete
-      debug:
-        msg: "Patching COMPLETE on {{ inventory_hostname }}"
