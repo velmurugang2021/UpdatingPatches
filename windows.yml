@@ -1,4 +1,3 @@
-tee ~/ansible/playbooks/patch_windows.yml > /dev/null <<'EOF'
 ---
 - name: Windows update playbook
   hosts: windows_nodes
@@ -98,4 +97,3 @@ tee ~/ansible/playbooks/patch_windows.yml > /dev/null <<'EOF'
     - name: Patching complete
       debug:
         msg: "Patching COMPLETE on {{ inventory_hostname }}"
-EOF
