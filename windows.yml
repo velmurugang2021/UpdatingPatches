@@ -1,89 +1,106 @@
 ---
-# Tasks to patch a Windows Server
-
 - name: Windows update playbook
   hosts: windows_nodes
-  gather_facts: false
-  become: true
+  gather_facts: yes
 
-  # Create a reject_list of patches we don't want
   vars:
-    reject_list: ["KB5034439", "KB1111111"]
+    patch_reboot_required: true
+    patch_security_only: false
 
   tasks:
-    # Ensure the logging directory does exist, if not create it
-    - name: Proof the logging path does exist
-      ansible.windows.win_file:
-        path: C:\Automation\logs\update
-        state: directory
 
-    - name: Revoke 30d update block
-      ansible.windows.win_shell: |
-        $pause = (Get-Date).AddDays(0)
-        $pause = $pause.ToUniversalTime().ToString( "yyyy-MM-ddTHH:mm:ssZ" )
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseUpdatesExpiryTime' -Value $pause 
+    - name: Ping Windows hosts first
+      win_ping:
 
-    - name: "Run Update Session Orchestrator check to clear GUI cached results"
-      ansible.windows.win_shell: |
-        Stop-Service -Name BITS,WaaSMedicSvc,WUAUSERV,CryptSvc -Force
-        Remove-Item -Path C:\Windows\System32\catroot2 -Recurse -Force
-        Remove-Item -Path C:\Windows\SoftwareDistribution -Recurse -Force
-        Start-Service -Name BITS,WaaSMedicSvc,WUAUSERV,CryptSvc
-        UsoClient RefreshSettings
-        UsoClient ScanInstallWait
-
-    # Determine the current time, to be used with the log-file later
-    - name: Get current date and time
-      ansible.builtin.shell:
-        cmd: date '+%Y%m%d'
-        executable: /bin/bash
-      register: current_time
-      delegate_to: localhost
+    - name: Check free disk space
+      win_shell: |
+        $disk = Get-PSDrive C
+        [math]::Round($disk.Free / 1GB, 2)
+      register: free_disk
       changed_when: false
 
-    # Set the log-file name
-    - name: Set log-file name
-      ansible.builtin.set_fact:
-        log_file_name: "win-updates-log-{{ current_time.stdout | trim }}.txt"
-
-    # First search for pending patches of all categories
-    - name: Check for available updates
-      ansible.windows.win_updates:
-        category_names: '*'
-        reject_list: "{{ reject_list }}"
-        state: searched
-        server_selection: windows_update
-        log_path: "C:\\Automation\\logs\\update\\{{ log_file_name }}"
-      register: update_result
-
-    # Print the result in human readable format
-    - name: update check results
+    - name: Show disk space
       debug:
-        var: update_result
+        msg: "{{ inventory_hostname }} — Free: {{ free_disk.stdout | trim }} GB"
 
-    # Apply pending patches of all categories
-    - name: Apply pending updates
-      ansible.windows.win_updates:
-        category_names: '*'
-        reject_list: "{{ reject_list }}"
+    - name: Fail if disk space less than 2GB
+      fail:
+        msg: "Not enough disk space: {{ free_disk.stdout | trim }} GB"
+      when: free_disk.stdout | trim | float < 2.0
+
+    - name: Install security updates only
+      win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
         state: installed
-        server_selection: windows_update
-        reboot: true
-        reboot_timeout: 1800
-        log_path: "C:\\Automation\\logs\\update\\{{ log_file_name }}"
-      register: apply_result
-      retries: 2
-      delay: 60
-      until: apply_result is succeeded
+        reboot: false
+        log_path: C:\ansible_patch.log
+      register: patch_result
+      when: patch_security_only | bool
+
+    - name: Install ALL updates
+      win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
+          - UpdateRollups
+          - Updates
+        state: installed
+        reboot: false
+        log_path: C:\ansible_patch.log
+      register: patch_result
+      when: not (patch_security_only | bool)
+
+    - name: Show patch results
+      debug:
+        msg: >
+          Host: {{ inventory_hostname }}
+          Updates installed: {{ patch_result.installed_update_count | default(0) }}
+          Reboot required: {{ patch_result.reboot_required | default(false) }}
+
+    - name: Reboot if required
+      win_reboot:
+        msg: "Rebooting after Windows Updates"
+        pre_reboot_delay: 10
+        post_reboot_delay: 30
+        reboot_timeout: 600
+      when:
+        - patch_result.reboot_required | default(false)
+        - patch_reboot_required | bool
+
+    - name: Wait for host to come back
+      wait_for_connection:
+        delay: 30
+        timeout: 300
+      when:
+        - patch_result.reboot_required | default(false)
+        - patch_reboot_required | bool
+
+    - name: Verify services after reboot
+      win_service:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - WinRM
+        - wuauserv
+        - EventLog
       ignore_errors: yes
 
-     # Print the result in human readable format
-    - name: Output update application results
-      debug:
-        var: apply_result
+    - name: Get last 5 installed hotfixes
+      win_shell: |
+        Get-HotFix |
+        Sort-Object InstalledOn -Descending |
+        Select-Object -First 5 |
+        Format-Table HotFixID, Description, InstalledOn -AutoSize |
+        Out-String
+      register: hotfix_list
+      changed_when: false
 
-    - name: Set update block to 30d
-      ansible.windows.win_shell: |
-        $pause = (Get-Date).AddDays(30)
-        $pause = $pause.ToUniversalTime().ToString( "yyyy-MM-ddTHH:mm:ssZ" )
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseUpdatesExpiryTime' -Value $pause
+    - name: Show installed hotfixes
+      debug:
+        msg: "{{ hotfix_list.stdout_lines }}"
+
+    - name: Patching complete
+      debug:
+        msg: "Patching COMPLETE on {{ inventory_hostname }}"
